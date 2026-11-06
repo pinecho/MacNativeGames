@@ -177,6 +177,7 @@ void runtime_gamepad_background_set(int on);    /* main thread: apply and save *
 void runtime_gamepad_focus(int on);             /* Mac window focus, independent of the guest's focus state */
 void runtime_gamepad_switch_left(void *controller, int x, int y);
 void runtime_gamepad_switch_right(void *controller, int x, int y);
+void runtime_gamepad_switch_raw_only(int on);   /* 1: the Switch HID reports' sticks replace GameController's outright */
 void runtime_gamepad_read(RuntimeGamepadState *out);
 extern int (*runtime_vr_pad)(int plain, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);   /* zeldaVR: set by gfx/nvn/totk_vr.m while VR runs (the Quest 3 controllers) */
 /* Mac software keyboard: exclusive controller capture; UI reads physical positions (controller_map.h),

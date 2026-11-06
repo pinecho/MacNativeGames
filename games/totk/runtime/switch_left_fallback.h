@@ -1,12 +1,14 @@
 /* Some Switch-compatible controllers send live 12-bit stick reports while
    GameController leaves the left stick at zero. Use raw input only after a
-   sustained discrepancy, and abandon it as soon as native input works. */
+   sustained discrepancy, and abandon it as soon as native input works.
+   forced: GameController's axes are known to be wrong (no stick calibration in the controller), so the raw ones are used
+   from the first report. */
 #pragma once
 #include <math.h>
 #include <stdint.h>
 
 typedef struct {
-    int x, y, valid, active;
+    int x, y, valid, active, forced;
     uint64_t at, zeroSince;
 } SwitchLeftFallback;
 
@@ -24,6 +26,10 @@ static inline int switch_left_get(SwitchLeftFallback *s, float nativeX, float na
                                   uint64_t now, float *x, float *y) {
     if (!s->valid || now < s->at || now - s->at > 250000000ULL) {
         s->active = 0; s->zeroSince = 0; return 0;
+    }
+    if (s->forced) {
+        *x = switch_left_axis(s->x); *y = switch_left_axis(s->y);
+        s->active = 1; return 1;
     }
     if (fabsf(nativeX) > 0.0001f || fabsf(nativeY) > 0.0001f) {
         s->active = 0; s->zeroSince = 0; return 0;

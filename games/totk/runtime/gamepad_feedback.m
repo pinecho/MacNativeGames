@@ -449,15 +449,21 @@ static void hid_motion_start(void);
 static void hid_motion_stop(void);
 static uint64_t zeroSince;          /* the controller's handler queue */
 static BOOL motionSeen, hidAsked;   /* the controller's handler queue; reset on attach */
+static BOOL hidRawSticks;   /* main queue: GameController's numbers are wrong, so hid_motion_start takes the sticks too */
 static void motion_sample(GCMotion *m) {   /* the controller's handler queue */
     GCAcceleration a = m.acceleration;
     if (m.hasGravityAndUserAcceleration) { a.x = m.gravity.x + m.userAcceleration.x; a.y = m.gravity.y + m.userAcceleration.y; a.z = m.gravity.z + m.userAcceleration.z; }
     const double acc[3] = {a.x, a.y, a.z}, gyro[3] = {m.rotationRate.x, m.rotationRate.y, m.rotationRate.z};
     if (!motionSeen) {   /* a real sensor never reads exactly zero on all six axes; see hid_motion_start */
-        if (!acc[0] && !acc[1] && !acc[2] && !gyro[0] && !gyro[1] && !gyro[2]) {
+        /* Nor a rate no gyro can reach. GameController scales with the calibration in the controller's SPI, and a Beitong
+           Kunpeng 20 in Switch mode over USB ("BTP-KP20D NS WIRED") has none, every byte 0xFF: every rate reads 32768 rad/s
+           or NaN, and its sticks answer in one direction only, while its 0x30 reports are fine. */
+        BOOL nonsense = NO;
+        for (int i = 0; i < 3; i++) if (!isfinite(gyro[i]) || fabs(gyro[i]) > 1000) nonsense = YES;
+        if (nonsense || (!acc[0] && !acc[1] && !acc[2] && !gyro[0] && !gyro[1] && !gyro[2])) {
             uint64_t now = runtime_now_ns();
             if (!zeroSince) zeroSince = now;
-            else if (!hidAsked && now - zeroSince > 1000000000ull) { hidAsked = YES; dispatch_async(dispatch_get_main_queue(), ^{ hid_motion_start(); }); }
+            else if (!hidAsked && now - zeroSince > 1000000000ull) { hidAsked = YES; dispatch_async(dispatch_get_main_queue(), ^{ hidRawSticks = nonsense; hid_motion_start(); }); }
             return;
         }
         motionSeen = YES;
@@ -499,6 +505,9 @@ static uint64_t hidZeroSince, hidImuTriedAt;   /* main run loop; reset by hid_mo
 static int hidImuRetries;
 static BOOL hidImuLive;
 static double hidAccScale[3] = {8.0 / 32768, 8.0 / 32768, 8.0 / 32768}, hidGyroScale[3] = {2000.0 / 32768, 2000.0 / 32768, 2000.0 / 32768}, hidGyroOrigin[3];
+/* No usable calibration: the nominal acceleration scale can be far off (a Kunpeng 20 reads about 11700 steps at rest, not
+   4096), which would keep the orientation from ever finding gravity. 1 G is taken from the first moment held still. */
+static BOOL hidAccLearn; static double hidAccSum; static int hidAccCount;
 static int16_t le16(const uint8_t *p) { return (int16_t)(p[0] | p[1] << 8); }
 /* Output report `id`: the packet counter, then `body` (0x01: rumble for both sides, subcommand, its argument; 0x10: rumble). */
 static void hid_write(IOHIDDeviceRef d, uint8_t id, const uint8_t *body, int n) {   /* any queue */
@@ -551,7 +560,7 @@ static void hid_calibration(const uint8_t *c, const char *which) {
         accOrigin[i] = le16(c + 2 * i); gyroOrigin[i] = le16(c + 12 + 2 * i);
         if (abs(accOrigin[i]) >= 1000) accOrigin[i] = 0;
         if (abs(gyroOrigin[i]) >= 1000) gyroOrigin[i] = 0;
-        if (le16(c + 6 + 2 * i) - accOrigin[i] <= 0 || le16(c + 18 + 2 * i) - gyroOrigin[i] <= 0) { fprintf(stderr, "[gyro] %s HID calibration unusable: nominal scales kept\n", which); return; }
+        if (le16(c + 6 + 2 * i) - accOrigin[i] <= 0 || le16(c + 18 + 2 * i) - gyroOrigin[i] <= 0) { fprintf(stderr, "[gyro] %s HID calibration unusable: nominal scales kept, 1 G learned at rest\n", which); hidAccLearn = YES; hidAccSum = 0; hidAccCount = 0; return; }
     }
     for (int i = 0; i < 3; i++) {
         hidAccScale[i] = 4.0 / (le16(c + 6 + 2 * i) - accOrigin[i]);
@@ -605,6 +614,15 @@ static void hid_report(void *ctx, IOReturn result, void *sender, IOHIDReportType
         const uint8_t *s = p + 13 + 12 * k;
         double raw[6];
         for (int i = 0; i < 6; i++) raw[i] = le16(s + 2 * i);
+        if (hidAccLearn) {
+            if (fmax(fabs(raw[3]), fmax(fabs(raw[4]), fabs(raw[5]))) < 100) { hidAccSum += sqrt(raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]); hidAccCount++; }
+            else { hidAccSum = 0; hidAccCount = 0; }
+            if (hidAccCount >= 64) {
+                double steps = hidAccSum / hidAccCount;
+                if (steps > 1000) { for (int i = 0; i < 3; i++) hidAccScale[i] = 1.0 / steps; fprintf(stderr, "[gyro] 1 G learned at rest: %.0f steps\n", steps); }
+                hidAccLearn = NO;
+            }
+        }
         for (int i = 0; i < 3; i++) { raw[i] *= hidAccScale[i]; raw[3 + i] = (raw[3 + i] - hidGyroOrigin[i]) * hidGyroScale[i] * (M_PI / 180); }
         /* to GCMotion's frame (x right, y top edge, z out of the face; acceleration as gravity: face up z = -1 G) */
         /* Right Joy-Con reverses raw Y/Z relative to Pro (SDL Switch sensor mapping). */
@@ -653,9 +671,12 @@ static void hid_motion_start(void) {   /* main queue */
     IOReturn r = hid_open(hidJoyConRight ? 0x2007 : 0x2009);
     if (r != kIOReturnSuccess) {
         fprintf(stderr, "[gyro] %s: no usable GameController motion and no matching Switch HID device could be opened (0x%x): no motion from it\n", name, r);
+        hidRawSticks = NO;
         return;
     }
-    hidMotion = YES; hidLast = 0; hidUserCalibration = NO;
+    hidMotion = YES; hidLast = 0; hidUserCalibration = NO; hidAccLearn = NO;
+    runtime_gamepad_switch_raw_only(hidRawSticks);
+    if (hidRawSticks) fprintf(stderr, "[gyro] %s: GameController's rates are impossible (no calibration in the controller): sticks from its HID reports too\n", name);
     hidZeroSince = hidImuTriedAt = 0; hidImuRetries = 0; hidImuLive = NO;
     motionPad.motion.valueChangedHandler = nil;   /* sensors stay active: GameController keeps the IMU reporting */
     runtime_motion_deadzone_default(1.2); runtime_motion_live(1);
@@ -673,6 +694,7 @@ static void hid_motion_stop(void) {   /* main queue */
     runtime_gamepad_switch_left(NULL, -1, -1);
     runtime_gamepad_switch_right(NULL, -1, -1);
     runtime_gamepad_switch_capture(NULL, 0);
+    runtime_gamepad_switch_raw_only(0); hidRawSticks = NO; hidAccLearn = NO;
     hidMotion = NO; hid_close_unused(); runtime_motion_deadzone_default(0);
 }
 /* The left Joy-Con of a paired set (057e:2006): opened for rumble; of its input only the battery is read (GameController

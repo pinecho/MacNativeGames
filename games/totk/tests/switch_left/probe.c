@@ -30,5 +30,13 @@ int main(void) {
  assert(switch_left_get(&s,0,0,t+620000000,&x,&y) && x==1 && y==0);
  switch_left_feed(&s,4096,2048,t+630000000);
  assert(!switch_left_get(&s,0,0,t+630000000,&x,&y));
+ s=(SwitchLeftFallback){0};
+ s.forced=1;
+ switch_left_feed(&s,2048,0,t);
+ assert(switch_left_get(&s,0.7f,0,t,&x,&y) && x==0 && y==-1);
+ assert(s.active);
+ assert(!switch_left_get(&s,0.7f,0,t+251000000,&x,&y));
+ switch_left_feed(&s,4096,2048,t+260000000);
+ assert(!switch_left_get(&s,0,0,t+260000000,&x,&y));
  puts("PASS: captured forward movement, activation delay, centering, stale release, native priority, drift rejection, both extremes, malformed data");
 }

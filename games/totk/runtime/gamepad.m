@@ -70,10 +70,13 @@ static _Atomic int gamepadBackground, gamepadFocused = 1;
 #endif
 
 /* Called on the main run loop by the already-open Switch HID motion stream. */
+static int switchRawOnly;
+void runtime_gamepad_switch_raw_only(int on) { switchRawOnly = on; }
 void runtime_gamepad_switch_left(void *source, int x, int y) {
     GCController *controller = (__bridge GCController *)source;
     if (rawLeftController != controller) rawLeft = (SwitchLeftFallback){0};
     rawLeftController = controller;
+    rawLeft.forced = switchRawOnly;
     switch_left_feed(&rawLeft, x, y, runtime_now_ns());
     refresh_gamepads();
 }
@@ -81,6 +84,7 @@ void runtime_gamepad_switch_right(void *source, int x, int y) {
     GCController *controller = (__bridge GCController *)source;
     if (rawRightController != controller) rawRight = (SwitchLeftFallback){0};
     rawRightController = controller;
+    rawRight.forced = switchRawOnly;
     switch_left_feed(&rawRight, x, y, runtime_now_ns());
     refresh_gamepads();
 }
