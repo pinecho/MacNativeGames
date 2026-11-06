@@ -35,6 +35,18 @@ make prepare runtime shader-tools PY=$PY WORK=$WORK
 
 `assets/expected-v1.1.0.json` pins every resulting hash; `make prepare` checks them.
 
+## App
+
+After the Build steps, make a self-contained app (`--game` and `--keys` only give it the game's icon):
+
+```sh
+python3.14 scripts/build_app.py --work $WORK --out "/Applications/Echoes of Wisdom.app" --game "<a file with the control data>" --keys prod.keys
+```
+
+The app checks the work folder against `assets/expected-v1.1.0.json`, then carries everything it needs. Saves and the shader
+cache are in `~/Library/Application Support/MacNativeGames/EoW`, not in `user-data/`; the log, with debug on, is
+`~/Library/Logs/MacNativeGames/eow.log`. Text language per app: `defaults write org.macnativegames.eow AppleLanguages -array zh-Hans`.
+
 ## Play
 
 From the work folder:
@@ -63,7 +75,7 @@ TOTK_GPU_ALLOW_SUBMIT=1 TOTK_GPU_BLOCKRT=1 TOTK_GPU_MIDCLEAR=1 TOTK_GPU_WIDEN=1 
 | `probe`, `probe-audio` | pass |
 | Played (Mac, M4 Pro, macOS 27.0.1) | title, prologue dungeon; about 1.5 hours over several sessions (longest about 40 minutes). Two early sessions ended in an unanswered `nn::fs::CleanDirectoryRecursively`, answered since (not yet seen in play) |
 
-Not done yet: a launcher app, iPhone / iPad, more than 60 fps (the game's logic follows its frame count), the stencil
+Not done yet: iPhone / iPad, more than 60 fps (the game's logic follows its frame count), the stencil
 plane in half-size depth copies, play past the prologue (untested).
 
 Tools for continuing: `scripts/disasm.py`, `scripts/xref.py`, `scripts/callers.py`, `scripts/symbolize.py`,
