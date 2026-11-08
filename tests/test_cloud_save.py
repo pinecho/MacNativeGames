@@ -65,3 +65,34 @@ class CloudSave(unittest.TestCase):
             self.assertEqual((other / f'save/{A}/progress.sav').read_text(), 'local copy')
             self.assertEqual({p.name: p.read_bytes() for p in current.iterdir()}, before)
             self.assertFalse((other / f'cloud-sync/{A}.plist').exists())
+
+    def test_later_uploads_update_the_copy_where_it_is(self):
+        # iCloud Drive renamed a copy moved into "current" while it still synced the previous one ("current 2"…).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); cloud, profile = root / 'cloud', root / 'profile'
+            local = profile / f'save/{A}'
+            (local / '0').mkdir(parents=True); (local / 'album').mkdir()
+            (local / '0/old.sav').write_bytes(b'left out later')
+            (local / '1').mkdir(); (local / '1/kept.sav').write_bytes(b'same')
+            self.run_save(cloud, profile, A, 'push')
+            saves = cloud / f'Users/{A}/Saves'; current = saves / 'current'
+            self.assertEqual((current / '0/old.sav').read_bytes(), b'left out later')
+            ids = {p: (current / p).stat().st_ino for p in ('', 'progress.sav', '1/kept.sav')}
+            (local / '0/old.sav').unlink()
+            (local / '2').mkdir(); (local / '2/new.sav').write_bytes(b'new')
+            self.run_save(cloud, profile, A, 'push-changed')
+            self.assertEqual([p.name for p in saves.iterdir()], ['current'])
+            self.assertEqual({p: (current / p).stat().st_ino for p in ids}, ids)
+            self.assertEqual((current / 'progress.sav').read_text(), A + ' changed')
+            self.assertAlmostEqual((current / 'progress.sav').stat().st_mtime, (local / 'progress.sav').stat().st_mtime, places=3)
+            self.assertEqual((current / '2/new.sav').read_bytes(), b'new')
+            self.assertFalse((current / '0/old.sav').exists())
+            self.assertTrue((current / '0').is_dir() and (current / 'album').is_dir())
+            meta = plistlib.loads((current / 'sync.plist').read_bytes())
+            self.assertEqual(meta['gen'], 2)
+            self.assertEqual(plistlib.loads((profile / f'cloud-sync/{A}.plist').read_bytes())['gen'], 2)
+            other = root / 'other'
+            self.run_save(cloud, other, A, 'pull')
+            self.assertEqual((other / f'save/{A}/progress.sav').read_text(), A + ' changed')
+            self.assertEqual((other / f'save/{A}/2/new.sav').read_bytes(), b'new')
+            self.assertFalse((other / f'save/{A}/0/old.sav').exists())

@@ -10,11 +10,13 @@ int main(int argc,char **argv){
   NSFileManager *fm=NSFileManager.defaultManager;
   [fm createDirectoryAtPath:local withIntermediateDirectories:YES attributes:nil error:nil];
   NSString *progress=[local stringByAppendingPathComponent:@"progress.sav"];
-  [[mode isEqualToString:@"push"]?uid:@"local copy" writeToFile:progress atomically:YES encoding:NSUTF8StringEncoding error:nil];
-  if(![mode isEqualToString:@"push"])[fm setAttributes:@{NSFileModificationDate:[NSDate dateWithTimeIntervalSince1970:1]} ofItemAtPath:progress error:nil];
+  BOOL pushes=[mode isEqualToString:@"push"] || [mode isEqualToString:@"push-changed"];
+  NSString *text=[mode isEqualToString:@"push"]?uid:[mode isEqualToString:@"push-changed"]?[uid stringByAppendingString:@" changed"]:@"local copy";
+  [text writeToFile:progress atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  if(!pushes)[fm setAttributes:@{NSFileModificationDate:[NSDate dateWithTimeIntervalSince1970:1]} ofItemAtPath:progress error:nil];
   setenv("TOTK_CLOUD_SAVE_DIR",root.fileSystemRepresentation,1);
   runtime_cloud_save_start(local.fileSystemRepresentation,profile.fileSystemRepresentation);
-  if([mode isEqualToString:@"push"] || [mode isEqualToString:@"mismatch"])push();
+  if(pushes || [mode isEqualToString:@"mismatch"])push();
   fflush(NULL);
  }
  return 0;

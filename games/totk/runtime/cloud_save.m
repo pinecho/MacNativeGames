@@ -5,7 +5,8 @@
    SHA-256 of its files:
    - at start, before the game reads a save (fs_host.c init), the folder's copy replaces the local folder when another
      device saved since this one last synced;
-   - after the game commits a save (fs_host.c commit), the folder is copied to the sync folder a few seconds later.
+   - after the game commits a save (fs_host.c commit), the folder is copied to the sync folder a few seconds later: the
+     first time as a new folder moved into place, then into that folder's files where they are (update_folder).
    When the two differ at start, the one saved last wins (sync.plist's time against the newest local file, which keeps its
    time when copied); the other is kept in <profile>/cloud-backups (the last 10). Nothing is merged inside a save.
    A game that is still running when the other device uploads does not overwrite that save (the game writes its save
@@ -158,6 +159,69 @@ static BOOL replace_folder(NSString *src, NSString *dst) {
     [fm removeItemAtPath:old error:nil];
     return YES;
 }
+/* An upload into a copy the folder already has: bring `dst` to the contents of `src` file by file, so `dst` and every file
+   that stays remain the items the synced folder knows. iCloud Drive tracks items by identity, and replace_folder's renames
+   (the old copy away, a new folder into its name) made two uploads a few seconds apart, a save and then quitting, leave it
+   with two folders wanting "current" before it had finished the first rename: it renamed one "current 2", later "current 4",
+   and no device found "current" any more. push writes sync.plist after this, so until then the old sync.plist's hash does
+   not match the files, and another device takes the copy as still syncing; push's next upload finishes an interrupted one. */
+static BOOL update_folder(NSString *src, NSString *dst) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray<NSString *> *want = save_files(src);
+    NSSet<NSString *> *keep = [NSSet setWithArray:want];
+    NSError *err = nil;
+    for (NSString *rel in want) {
+        NSString *from = [src stringByAppendingPathComponent:rel], *to = [dst stringByAppendingPathComponent:rel];
+        NSDictionary *a = [fm attributesOfItemAtPath:from error:nil], *b = [fm attributesOfItemAtPath:to error:nil];
+        NSData *data = nil;
+        if (b && ![b.fileType isEqualToString:NSFileTypeRegular]) {   // a folder where the save now has a file
+            if (![fm removeItemAtPath:to error:&err]) { LOG("cannot replace %s: %s\n", rel.UTF8String, err.localizedDescription.UTF8String); return NO; }
+            b = nil;
+        }
+        if (b && b.fileSize == a.fileSize && fabs(b.fileModificationDate.timeIntervalSince1970 - a.fileModificationDate.timeIntervalSince1970) < 0.001)
+            continue;   // unchanged since the last upload, which copied the file's time with it
+        if (!a || !(data = [NSData dataWithContentsOfFile:from options:0 error:&err])) {
+            LOG("cannot read %s: %s\n", rel.UTF8String, err ? err.localizedDescription.UTF8String : "?"); return NO;
+        }
+        if (![fm createDirectoryAtPath:to.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&err]) {
+            LOG("cannot create a folder for %s: %s\n", rel.UTF8String, err.localizedDescription.UTF8String); return NO;
+        }
+        if (b) {   // written into the same file, not a new one renamed over it
+            NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:to];
+            BOOL wrote = h && [h truncateAtOffset:0 error:&err] && [h writeData:data error:&err];
+            if (![h closeAndReturnError:(wrote ? &err : NULL)]) wrote = NO;
+            if (!wrote) { LOG("cannot write %s: %s\n", rel.UTF8String, err ? err.localizedDescription.UTF8String : "?"); return NO; }
+        } else if (![data writeToFile:to options:0 error:&err]) {
+            LOG("cannot write %s: %s\n", rel.UTF8String, err.localizedDescription.UTF8String); return NO;
+        }
+        [fm setAttributes:@{NSFileModificationDate: a.fileModificationDate} ofItemAtPath:to error:nil];
+    }
+    /* The save's empty folders (an album with no pictures yet); then what it no longer has, the files first and then the
+       folders left empty, deepest first. Finder's and iCloud's own files stay. */
+    NSDirectoryEnumerator *en = [fm enumeratorAtPath:src];
+    for (NSString *rel in en)
+        if ([en.fileAttributes.fileType isEqualToString:NSFileTypeDirectory])
+            [fm createDirectoryAtPath:[dst stringByAppendingPathComponent:rel] withIntermediateDirectories:YES attributes:nil error:nil];
+    NSMutableArray<NSString *> *folders = [NSMutableArray array];
+    en = [fm enumeratorAtPath:dst];
+    for (NSString *rel in en) {
+        NSString *name = rel.lastPathComponent;
+        if ([en.fileAttributes.fileType isEqualToString:NSFileTypeDirectory]) { [folders addObject:rel]; continue; }
+        if ([rel isEqualToString:@"sync.plist"] || [name isEqualToString:@".DS_Store"] || ([name hasPrefix:@"."] && [name hasSuffix:@".icloud"]) ||
+            [keep containsObject:rel]) continue;
+        if (![fm removeItemAtPath:[dst stringByAppendingPathComponent:rel] error:&err]) {
+            LOG("cannot remove %s: %s\n", rel.UTF8String, err.localizedDescription.UTF8String); return NO;
+        }
+    }
+    for (NSString *rel in folders.reverseObjectEnumerator) {
+        BOOL folder = NO;
+        if ([fm fileExistsAtPath:[src stringByAppendingPathComponent:rel] isDirectory:&folder] && folder) continue;
+        NSString *path = [dst stringByAppendingPathComponent:rel];
+        NSArray *left = [fm contentsOfDirectoryAtPath:path error:nil];
+        if (left.count == 0 || (left.count == 1 && [left[0] isEqualToString:@".DS_Store"])) [fm removeItemAtPath:path error:nil];
+    }
+    return YES;
+}
 static BOOL backup(NSString *src, NSString *what) {
     NSFileManager *fm = NSFileManager.defaultManager;
     [fm createDirectoryAtPath:g_backups withIntermediateDirectories:YES attributes:nil error:nil];
@@ -208,7 +272,9 @@ static void push(void) {
     [NSFileManager.defaultManager createDirectoryAtPath:g_cloud withIntermediateDirectories:YES attributes:nil error:nil];
     __block BOOL ok = NO;
     NSError *cerr = nil;
-    [[[NSFileCoordinator alloc] initWithFilePresenter:nil] coordinateWritingItemAtURL:[NSURL fileURLWithPath:cur] options:NSFileCoordinatorWritingForReplacing error:&cerr byAccessor:^(NSURL *u) {
+    /* The first upload builds the copy beside it and moves it into the free name; later ones update it (update_folder). */
+    BOOL first = ![NSFileManager.defaultManager fileExistsAtPath:cur];
+    [[[NSFileCoordinator alloc] initWithFilePresenter:nil] coordinateWritingItemAtURL:[NSURL fileURLWithPath:cur] options:first ? NSFileCoordinatorWritingForReplacing : 0 error:&cerr byAccessor:^(NSURL *u) {
         /* Recheck under the writer's coordination lock: another device can commit after the earlier read. */
         NSDictionary *latest = read_cloud_meta([u.path stringByAppendingPathComponent:@"sync.plist"]);
         if (g_identity_conflict || (latest != nil) != (meta != nil) ||
@@ -218,7 +284,7 @@ static void push(void) {
         if (!latest && [NSFileManager.defaultManager fileExistsAtPath:u.path]) {
             LOG("remote folder is incomplete; left untouched\n"); return;
         }
-        if (!replace_folder(g_local, u.path)) return;
+        if (!([NSFileManager.defaultManager fileExistsAtPath:u.path] ? update_folder(g_local, u.path) : replace_folder(g_local, u.path))) return;
         ok = [@{@"uid": g_user, @"gen": @(gen), @"device": NSProcessInfo.processInfo.hostName ?: @"?", @"time": @(NSDate.date.timeIntervalSince1970), @"hash": hash}
                  writeToFile:[u.path stringByAppendingPathComponent:@"sync.plist"] atomically:YES];
     }];
