@@ -47,6 +47,12 @@ int runtime_core_away(void);          /* runtime/threads.c: a guest thread gives
 void runtime_core_back(int *away);
 void runtime_save_probe(void);
 int runtime_fs_save_busy(void);   /* runtime/fs_host.c: the game is writing save data (window close waits) */
+void runtime_cloud_save_start(const char *save_dir, const char *profile_dir);   /* cloud_save.m: save sync through a folder the player chooses (fs_host.c) */
+void runtime_cloud_save_changed(void);
+void runtime_cloud_save_quit(void);   /* the Mac window closes (frontend.m): uploads what is not uploaded yet */
+/* The chosen sync folder (TOTK_CLOUD_SAVE_FOLDER) lives in this defaults suite, shared with Tears of the Kingdom and Breath of
+   the Wild: the app menu (frontend.m) and the launcher (app/launcher.m) run in processes with different bundle identifiers. */
+#define RUNTIME_SAVE_SYNC_DEFAULTS "org.macnativegames.save-sync"
 uint8_t *runtime_module_base(const char *name);   /* runtime/loader.c: "main", "subsdk0", "sdk" (probes) */
 uint64_t runtime_module_permission(uint64_t address,uint64_t size,unsigned permission);
 uint64_t runtime_module_lock_permission(uint64_t address,uint64_t size,unsigned mask,unsigned attribute);

@@ -134,6 +134,12 @@ class CloudSave(unittest.TestCase):
             self.assertFalse((current / 'progress 2.sav').exists())
             self.assertEqual((current / 'progress.sav').read_text(), A)
 
+    def test_game_folders_build_the_same_sync_code(self):
+        # games/eow and games/mvdk are self-contained folders with their own copy; this test runs TOTK's, so keep them equal.
+        source = (ROOT / 'games/totk/runtime/cloud_save.m').read_bytes()
+        for game in ('eow', 'mvdk'):
+            self.assertEqual((ROOT / f'games/{game}/runtime/cloud_save.m').read_bytes(), source, game)
+
     def test_later_uploads_update_the_copy_where_it_is(self):
         # iCloud Drive renamed a copy moved into "current" while it still synced the previous one ("current 2"…).
         with tempfile.TemporaryDirectory() as tmp:
