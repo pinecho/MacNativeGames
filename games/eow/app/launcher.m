@@ -59,6 +59,11 @@ int main(int argc, char **argv) {
         }
         setenv("TOTK_CONTROLS", env_or("TOTK_CONTROLS", [data stringByAppendingPathComponent:@"controls.txt"]).fileSystemRepresentation, 1);
         setenv("TOTK_PROFILE_DIR", profile.fileSystemRepresentation, 1);
+        /* Save sync (runtime/cloud_save.m): the folder chosen in the app menu (runtime/frontend.m), kept in the defaults suite
+           RUNTIME_SAVE_SYNC_DEFAULTS (runtime/runtime.h) that Tears of the Kingdom and Breath of the Wild use too; the save goes
+           to <folder>/<GAME_NAME>. TOTK_CLOUD_SAVE_DIR (the game's own sync folder) wins over it; 0 = off. */
+        NSString *syncFolder = [[[NSUserDefaults alloc] initWithSuiteName:@"org.macnativegames.save-sync"] stringForKey:@"TOTK_CLOUD_SAVE_FOLDER"];
+        if (!getenv("TOTK_CLOUD_SAVE_DIR") && syncFolder.length) setenv("TOTK_CLOUD_SAVE_FOLDER", syncFolder.fileSystemRepresentation, 0);
         setenv("TOTK_SHADER_CACHE", cache.fileSystemRepresentation, 1);
         setenv("TOTK_GAME_SLOT_DIR", slot.fileSystemRepresentation, 1);
         setenv("TOTK_ROMFS_PROOF_DIR", data.fileSystemRepresentation, 1);   // the app bundle stays read-only

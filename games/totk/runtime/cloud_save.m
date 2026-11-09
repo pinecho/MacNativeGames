@@ -22,8 +22,10 @@
    (runtime/frontend.m) or the offer at a start that has none (app/launcher.m), on iPhone / iPad from that offer, the
    Settings app or the Home Screen icon's menu (ios/Sources/main.m, a security-scoped bookmark). Any folder each device
    can see works, among them an iCloud Drive folder (also one shared between two Apple IDs); the app needs no iCloud
-   container, entitlement or paid team. One folder holds both games side by side. TOTK_CLOUD_SAVE_DIR (the <sync> folder
-   itself) wins over it; TOTK_CLOUD_SAVE_DIR=0 turns sync off. With neither, nothing syncs. */
+   container, entitlement or paid team. One folder holds every game side by side. TOTK_CLOUD_SAVE_DIR (the <sync> folder
+   itself) wins over it; TOTK_CLOUD_SAVE_DIR=0 turns sync off. With neither, nothing syncs.
+   games/eow and games/mvdk build the same file from their own runtime/ (tests/test_cloud_save.py keeps the copies equal);
+   there the folder is chosen from the app menu only (no offer at start) and there is no iPhone / iPad build of it. */
 #import <Foundation/Foundation.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <TargetConditionals.h>
